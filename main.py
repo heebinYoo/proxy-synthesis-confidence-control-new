@@ -27,6 +27,8 @@ from torch.utils.tensorboard import SummaryWriter
 import net
 import loss
 import utils
+from visualizer.visualizer import get_embed, generate_weight_embedding_relation_heatmap_figure, \
+    generate_weight_tsne_figure, generate_feature_radius_dist_fig, generate_singular_value_figure
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -104,7 +106,12 @@ parser.add_argument('--ps_mu', default=0.0, type=float,
                     help='generation ratio in proxy synthesis')
 parser.add_argument('--ps_alpha', default=0.0, type=float,
                     help='alpha for beta distribution in proxy synthesis')
-
+parser.add_argument('--normalize', default=True, type=lambda s: s.lower() in ['true', 't', 'yes', '1'],
+                    help='do normalize?')
+parser.add_argument('--confidence_control_mode', default="non", type=str,
+                    help='what confidence_control_mode?')
+parser.add_argument('--visualize', default=True, type=lambda s: s.lower() in ['true', 't', 'yes', '1'],
+                    help='visualize?')
 
 def main():
     args = parser.parse_args()
@@ -174,6 +181,7 @@ def main():
                                           transforms.Lambda(lambda x: x.mul(scale_value)),
                                           normalize,])
     test_image = datasets.ImageFolder(testdir, test_transforms)
+    args.C_test = len(test_image.class_to_idx)
 
     test_class_dict, max_r = utils.get_class_dict(test_image)
     args.test_class_dict = test_class_dict
@@ -212,7 +220,7 @@ def main():
     # define loss function (criterion) and optimizer
     if args.loss.lower() == 'Norm_SoftMax'.lower():
         criterion = loss.Norm_SoftMax(args.dim, args.C, scale=args.scale,
-                                      ps_mu=args.ps_mu, ps_alpha=args.ps_alpha).cuda()
+                                      ps_mu=args.ps_mu, ps_alpha=args.ps_alpha, normalize=args.normalize, confidence_control_mode=args.confidence_control_mode).cuda()
     elif args.loss.lower() == 'Proxy_NCA'.lower():
         criterion = loss.Proxy_NCA(args.dim, args.C, scale=args.scale,
                                    ps_mu=args.ps_mu, ps_alpha=args.ps_alpha).cuda()
@@ -309,6 +317,38 @@ def main():
         if not args.eval_best:
             global_step = train(train_loader, model, pooling, embedding, criterion, optimizer, writer, global_step,
                                 epoch, scaler, autocast, args)
+
+        if epoch % args.check_epoch == 0 and args.visualize:
+            model.eval()
+            embedding.eval()
+            criterion.eval()
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            train_embedding_list, train_label_list = get_embed(model, pooling, embedding, device, train_loader,
+                                                               args.dim, args.batch_size,
+                                                               len(train_loader.dataset.targets))
+            test_embedding_list, test_label_list = get_embed(model, pooling, embedding, device, test_loader, args.dim,
+                                                             test_loader.batch_size,
+                                                             len(test_loader.dataset.targets))
+
+            fig = generate_weight_embedding_relation_heatmap_figure(train_embedding_list,
+                                                                    criterion.proxy.detach().cpu().numpy(), args.dim,
+                                                                    train_label_list)
+            writer.add_figure('weight-embedding-relation', fig, epoch)
+
+            # tsne
+            fig = generate_weight_tsne_figure(train_embedding_list, train_label_list, test_embedding_list,
+                                              test_label_list, args.C, args.C_test,
+                                              criterion.proxy.detach().cpu().numpy())
+            writer.add_figure('tsne', fig, epoch)
+
+            # radius-distribution
+            fig = generate_feature_radius_dist_fig(train_embedding_list, test_embedding_list)
+            writer.add_figure('embed-feature-radius-dist', fig, epoch)
+
+            # singular-value
+            fig = generate_singular_value_figure(train_embedding_list, train_label_list, test_embedding_list,
+                                                 test_label_list)
+            writer.add_figure('singular-value-of-embedding', fig, epoch)
 
         # evaluate on validation set
         if epoch % args.check_epoch == 0:

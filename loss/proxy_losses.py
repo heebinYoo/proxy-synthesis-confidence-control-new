@@ -48,33 +48,38 @@ def proxy_synthesis(input_l2, proxy_l2, target, ps_alpha, ps_mu):
 
 
 class Norm_SoftMax(nn.Module):
-    def __init__(self, input_dim, n_classes, scale=23.0, ps_mu=0.0, ps_alpha=0.0):
+    def __init__(self, input_dim, n_classes, scale=23.0, ps_mu=0.0, ps_alpha=0.0, normalize=True, confidence_control_mode="non"):
         super(Norm_SoftMax, self).__init__()
         self.scale = scale
         self.n_classes = n_classes
         self.ps_mu = ps_mu
         self.ps_alpha = ps_alpha
         self.proxy = Parameter(torch.Tensor(n_classes, input_dim))
+        self.normalize = normalize
+        self.confidence_control_mode = confidence_control_mode
         
         init.kaiming_uniform_(self.proxy, a=math.sqrt(5))
         
 
     def forward(self, input, target):
-        input_l2 = F.normalize(input, p=2, dim=1)
-        proxy_l2 = F.normalize(self.proxy, p=2, dim=1)
-        
-        if self.ps_mu > 0.0:
-            input_l2, proxy_l2, target = proxy_synthesis(input_l2, proxy_l2, target,
-                                                         self.ps_alpha, self.ps_mu)
+        input_l2 = F.normalize(input, p=2, dim=1) if self.normalize else input
+        proxy_l2 = F.normalize(self.proxy, p=2, dim=1) if self.normalize else self.proxy
 
-        sim_mat = input_l2.matmul(proxy_l2.t())
-        
-        logits = self.scale * sim_mat
-        
-        loss = F.cross_entropy(logits, target)
-        
-        return loss
-
+        if self.confidence_control_mode == "non":
+            if self.ps_mu > 0.0:
+                input_l2, proxy_l2, target = proxy_synthesis(input_l2, proxy_l2, target, self.ps_alpha, self.ps_mu)
+            sim_mat = input_l2.matmul(proxy_l2.t())
+            logits = self.scale * sim_mat
+            loss = F.cross_entropy(logits, target)
+            return loss
+        if self.confidence_control_mode == "naive":
+            if self.ps_mu > 0.0:
+                input_l2, proxy_l2, target = proxy_synthesis(input_l2, proxy_l2, target, self.ps_alpha, self.ps_mu)
+            sim_mat = input_l2.matmul(proxy_l2.t())
+            sim_mat = torch.cat((sim_mat, sim_mat[tuple(range(target.shape[0])), target].reshape(-1, 1)), dim=1)
+            logits = self.scale * sim_mat
+            loss = F.cross_entropy(logits, target)
+            return loss
 
 class Proxy_NCA(nn.Module):
     def __init__(self, input_dim, n_classes, scale=10.0, ps_mu=0.0, ps_alpha=0.0):
