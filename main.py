@@ -325,7 +325,7 @@ def main():
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             train_embedding_list, train_label_list = get_embed(model, pooling, embedding, device, train_loader,
                                                                args.dim, args.batch_size,
-                                                               len(train_loader.dataset.targets))
+                                                               len(train_loader.dataset.image_list) if args.n_instance > 1 else len(train_loader.dataset.targets))
             test_embedding_list, test_label_list = get_embed(model, pooling, embedding, device, test_loader, args.dim,
                                                              test_loader.batch_size,
                                                              len(test_loader.dataset.targets))
